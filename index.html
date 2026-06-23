@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Eventos Córdoba Bot — Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      padding: 24px;
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+    h1 {
+      font-size: 28px;
+      margin-bottom: 4px;
+      background: linear-gradient(90deg, #6366f1, #ec4899);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .subtitle { color: #94a3b8; font-size: 14px; margin-bottom: 24px; }
+    .kpis {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .kpi-card {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 12px;
+      padding: 16px 20px;
+    }
+    .kpi-label { color: #94a3b8; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .kpi-value { font-size: 32px; font-weight: 700; margin-top: 6px; color: #f1f5f9; }
+    .kpi-sub { color: #64748b; font-size: 12px; margin-top: 4px; }
+    .charts {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(450px, 1fr));
+      gap: 20px;
+    }
+    .chart-card {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 12px;
+      padding: 20px;
+    }
+    .chart-card h2 {
+      font-size: 14px;
+      font-weight: 600;
+      color: #cbd5e1;
+      margin-bottom: 16px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .chart-wrap { position: relative; height: 280px; }
+    footer { margin-top: 32px; color: #64748b; font-size: 12px; text-align: center; }
+    a { color: #818cf8; text-decoration: none; }
+    .loading { color: #64748b; text-align: center; padding: 20px; }
+    .error { color: #ef4444; padding: 12px; background: #450a0a; border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <h1>🎟️ Eventos Córdoba Bot</h1>
+  <p class="subtitle">Dashboard de métricas en tiempo real · Conectado a Supabase</p>
+
+  <div class="kpis" id="kpis">
+    <div class="kpi-card"><div class="kpi-label">Mensajes hoy</div><div class="kpi-value" id="kpi-msg-hoy">—</div></div>
+    <div class="kpi-card"><div class="kpi-label">Usuarios únicos hoy</div><div class="kpi-value" id="kpi-usr-hoy">—</div></div>
+    <div class="kpi-card"><div class="kpi-label">Eventos en base</div><div class="kpi-value" id="kpi-eventos-total">—</div><div class="kpi-sub">próximos a la fecha</div></div>
+    <div class="kpi-card"><div class="kpi-label">Fuentes activas</div><div class="kpi-value" id="kpi-fuentes">—</div></div>
+  </div>
+
+  <div class="charts">
+    <div class="chart-card">
+      <h2>📊 Mensajes por día (últimos 14)</h2>
+      <div class="chart-wrap"><canvas id="chart-queries"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <h2>🎯 Intents detectados por LLM</h2>
+      <div class="chart-wrap"><canvas id="chart-intents"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <h2>🏷️ Categorías más consultadas</h2>
+      <div class="chart-wrap"><canvas id="chart-categorias"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <h2>🌐 Fuentes de eventos</h2>
+      <div class="chart-wrap"><canvas id="chart-fuentes"></canvas></div>
+    </div>
+    <div class="chart-card" style="grid-column: 1 / -1;">
+      <h2>⚠️ Tasa de respuestas vacías (% sin eventos)</h2>
+      <div class="chart-wrap"><canvas id="chart-vacias"></canvas></div>
+    </div>
+  </div>
+
+  <footer>
+    Bot: <a href="https://t.me/eventos_cordoba_bot" target="_blank">@eventos_cordoba_bot</a> ·
+    Construido con n8n + Supabase + Groq LLM ·
+    Última actualización: <span id="last-update">—</span>
+  </footer>
+
+  <script>
+    const SUPABASE_URL = 'https://osrvawwxirdpighhzoay.supabase.co';
+    const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9zcnZhd3d4aXJkcGlnaGh6b2F5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgyODc1OTUsImV4cCI6MjA5Mzg2MzU5NX0.gTBTB8vTsB16e1to9uguwpAf_vTQqmWv8Jtzbl_JIdw';
+
+    const COLORS = {
+      primary: '#6366f1', pink: '#ec4899', cyan: '#06b6d4',
+      green: '#10b981', amber: '#f59e0b', red: '#ef4444',
+      violet: '#a855f7', blue: '#3b82f6', teal: '#14b8a6'
+    };
+    const COLOR_LIST = Object.values(COLORS);
+
+    async function fetchView(view, query = '') {
+      const url = `${SUPABASE_URL}/rest/v1/${view}${query}`;
+      const res = await fetch(url, {
+        headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${SUPABASE_ANON_KEY}` }
+      });
+      if (!res.ok) throw new Error(`${view}: HTTP ${res.status}`);
+      return res.json();
+    }
+
+    Chart.defaults.color = '#94a3b8';
+    Chart.defaults.borderColor = '#334155';
+    Chart.defaults.font.family = '-apple-system, sans-serif';
+
+    function barChart(canvasId, labels, data, label, colors = null) {
+      const ctx = document.getElementById(canvasId).getContext('2d');
+      return new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [{
+            label, data,
+            backgroundColor: colors || COLOR_LIST.slice(0, data.length),
+            borderRadius: 6
+          }]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            y: { beginAtZero: true, ticks: { color: '#64748b' }, grid: { color: '#1e293b' } },
+            x: { ticks: { color: '#94a3b8' }, grid: { display: false } }
+          }
+        }
+      });
+    }
+
+    function lineChart(canvasId, labels, data, label, color = COLORS.primary) {
+      const ctx = document.getElementById(canvasId).getContext('2d');
+      return new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [{
+            label, data,
+            borderColor: color,
+            backgroundColor: color + '33',
+            fill: true, tension: 0.3, borderWidth: 2,
+            pointRadius: 4, pointHoverRadius: 6
+          }]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            y: { beginAtZero: true, ticks: { color: '#64748b' }, grid: { color: '#1e293b' } },
+            x: { ticks: { color: '#94a3b8' }, grid: { display: false } }
+          }
+        }
+      });
+    }
+
+    function pieChart(canvasId, labels, data) {
+      const ctx = document.getElementById(canvasId).getContext('2d');
+      return new Chart(ctx, {
+        type: 'doughnut',
+        data: {
+          labels,
+          datasets: [{
+            data,
+            backgroundColor: COLOR_LIST.slice(0, data.length),
+            borderWidth: 2, borderColor: '#1e293b'
+          }]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { position: 'right', labels: { color: '#cbd5e1', padding: 10 } } }
+        }
+      });
+    }
+
+    async function loadDashboard() {
+      try {
+        const [queries, intents, vacias, fuentes, categorias] = await Promise.all([
+          fetchView('kpi_queries_por_dia', '?order=dia.desc&limit=14'),
+          fetchView('kpi_intents_top'),
+          fetchView('kpi_tasa_vacias', '?order=dia.desc&limit=14'),
+          fetchView('kpi_fuentes_top'),
+          fetchView('kpi_categorias_top')
+        ]);
+
+        // KPIs cards
+        const hoy = queries[0] || {};
+        document.getElementById('kpi-msg-hoy').textContent = hoy.mensajes ?? 0;
+        document.getElementById('kpi-usr-hoy').textContent = hoy.usuarios_unicos ?? 0;
+        document.getElementById('kpi-eventos-total').textContent = fuentes.reduce((a, b) => a + b.cantidad_eventos, 0);
+        document.getElementById('kpi-fuentes').textContent = fuentes.length;
+
+        // Charts
+        const queriesRev = queries.slice().reverse();
+        lineChart('chart-queries',
+          queriesRev.map(r => r.dia.slice(5)),
+          queriesRev.map(r => r.mensajes),
+          'Mensajes');
+
+        pieChart('chart-intents',
+          intents.map(r => r.intent),
+          intents.map(r => r.cantidad));
+
+        barChart('chart-categorias',
+          categorias.map(r => r.categoria),
+          categorias.map(r => r.consultas),
+          'Consultas');
+
+        barChart('chart-fuentes',
+          fuentes.map(r => r.source),
+          fuentes.map(r => r.cantidad_eventos),
+          'Eventos');
+
+        const vaciasRev = vacias.slice().reverse();
+        lineChart('chart-vacias',
+          vaciasRev.map(r => r.dia.slice(5)),
+          vaciasRev.map(r => r.pct_vacias || 0),
+          '% vacías',
+          COLORS.amber);
+
+        document.getElementById('last-update').textContent = new Date().toLocaleString('es-AR');
+      } catch (err) {
+        document.body.insertAdjacentHTML('afterbegin',
+          `<div class="error">⚠️ Error cargando datos: ${err.message}</div>`);
+        console.error(err);
+      }
+    }
+
+    loadDashboard();
+    setInterval(loadDashboard, 60000); // refresh cada 60s
+  </script>
+</body>
+</html>
